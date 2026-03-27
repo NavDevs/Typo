@@ -12,6 +12,9 @@ const spaceGrotesk = Space_Grotesk({
 export const metadata: Metadata = {
   title: "Typo",
   description: "Real-time aesthetic chat environment.",
+  icons: {
+    icon: "/logo.png",
+  },
 };
 
 export default function RootLayout({
