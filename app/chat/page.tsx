@@ -101,13 +101,13 @@ export default async function ChatPage() {
 
 
   return (
-    <main className="flex h-screen w-full flex-col bg-[#0b1326] text-white relative overflow-hidden">
+    <main className="flex h-[100dvh] w-full flex-col bg-[#0b1326] text-white relative overflow-hidden">
       {/* Background aesthetics */}
       <div className="absolute inset-0 z-0 bg-gradient-to-br from-[#0b1326] via-[#111833] to-[#1c133a] opacity-50" />
       <div className="absolute top-0 right-0 h-[600px] w-[600px] rounded-full bg-indigo-600/10 blur-[150px] pointer-events-none" />
       <div className="absolute bottom-0 left-0 h-[600px] w-[600px] rounded-full bg-purple-600/10 blur-[150px] pointer-events-none" />
       
-      <div className="z-10 h-full w-full flex p-4 sm:p-6 lg:p-8">
+      <div className="z-10 h-full w-full flex p-0 sm:p-4 lg:p-8">
         <ChatDashboard />
       </div>
     </main>
