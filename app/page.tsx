@@ -242,32 +242,6 @@ export default async function Home() {
         </footer>
 
       </div>
-
-      <style jsx global>{`
-        .perspective-1000 { 
-          perspective: 1000px; 
-          transform-style: preserve-3d;
-        }
-        .rotate-y-2 { transform: rotateY(2deg); }
-        .rotate-x-1 { transform: rotateX(1deg); }
-
-        @keyframes gradient-x {
-          0%, 100% { background-position: 0% 50%; }
-          50% { background-position: 100% 50%; }
-        }
-        .animate-gradient-x {
-          background-size: 200% auto;
-          animation: gradient-x 6s linear infinite;
-        }
-
-        /* Responsive h1 adjustment */
-        @media (max-width: 640px) {
-          h1 { 
-            line-height: 1.05 !important;
-            letter-spacing: -0.04em !important;
-          }
-        }
-      `}</style>
     </main>
   );
 }
