@@ -11,10 +11,22 @@ import { setSupabaseTokenGetter, getSupabaseClient } from '@/lib/supabase/client
  */
 export function useSupabase() {
   const { getToken } = useAuth();
+  const client = getSupabaseClient();
 
   useEffect(() => {
+    // 1. Set token getter for all HTTP fetch requests and WebSocket realtime
     setSupabaseTokenGetter(() => getToken({ template: 'supabase' }));
-  }, [getToken]);
 
-  return getSupabaseClient();
+    // 2. Aggressively push the token to Realtime to fix the React mount race-condition
+    const syncRealtime = async () => {
+      try {
+        const token = await getToken({ template: 'supabase' });
+        if (token) client.realtime.setAuth(token);
+      } catch (err) {}
+    };
+    syncRealtime();
+    
+  }, [getToken, client]);
+
+  return client;
 }

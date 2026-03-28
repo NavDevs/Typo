@@ -12,7 +12,7 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useUsers } from '@/hooks/useUsers';
 import { useNotificationEffects } from '@/hooks/useNotificationEffects';
-import { Search, Bell, Settings, CheckCheck, Trash2, Smile, AtSign, UserPlus, MessageCircle, UserX } from 'lucide-react';
+import { Search, Bell, Settings, CheckCheck, Trash2, Smile, AtSign, UserPlus, MessageCircle, UserX, Loader2 } from 'lucide-react';
 import { acceptFriendAction, rejectFriendAction } from '@/app/actions/modals';
 import { useToast } from '@/components/ui/ToastProvider';
 
@@ -28,10 +28,11 @@ export default function ChatDashboard() {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(null);
   const [lastNotifId, setLastNotifId] = useState<string | null>(null);
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
   
-  const { allUsers, currentUser, friends, friendRequests, updatePreferences } = useUsers();
+  const { allUsers, currentUser, friends, friendRequests, updatePreferences, refetch } = useUsers();
   const { onlineUsers, updatePresence } = usePresence();
-  const { notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications(currentUser?.id || null);
+  const { notifications, unreadCount, markAsRead, markAllAsRead, refresh: refreshNotifications } = useNotifications(currentUser?.id || null);
   const { permission, subscribeToPush } = usePushNotifications(currentUser?.id || null);
   const { triggerNotification } = useNotificationEffects();
   const { toast } = useToast();
@@ -109,6 +110,7 @@ export default function ChatDashboard() {
               setIsSidebarOpen(false);
             }}
             onlineUsers={onlineUsers}
+            onChatClear={() => setActiveChat(null)}
           />
           
           {/* Settings Button in Sidebar Bottom */}
@@ -188,6 +190,7 @@ export default function ChatDashboard() {
                         <div className="space-y-1 p-2">
                           {friendRequests.map(req => {
                             const sender = allUsers.find(u => u.id === req.sender_id);
+                            const isProcessing = processingRequestId === req.id;
                             return (
                               <div 
                                 key={req.id} 
@@ -210,30 +213,50 @@ export default function ChatDashboard() {
                                 </div>
                                 <div className="flex gap-2 mt-1">
                                   <button
+                                    disabled={isProcessing}
                                     onClick={async () => {
-                                      const result = await acceptFriendAction(req.id);
-                                      if (result?.success) {
-                                        toast('Friend request accepted!', 'success');
-                                      } else {
-                                        toast(result?.error || 'Failed to accept', 'error');
+                                      setProcessingRequestId(req.id);
+                                      try {
+                                        const result = await acceptFriendAction(req.id);
+                                        if (result?.success) {
+                                          toast('Friend request accepted!', 'success');
+                                          refetch();
+                                          refreshNotifications();
+                                        } else {
+                                          toast(result?.error || 'Failed to accept', 'error');
+                                        }
+                                      } catch {
+                                        toast('Failed to accept request', 'error');
+                                      } finally {
+                                        setProcessingRequestId(null);
                                       }
                                     }}
-                                    className="flex-1 px-3 py-1.5 rounded-lg bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                                    className="flex-1 px-3 py-1.5 rounded-lg bg-green-600/20 text-green-400 hover:bg-green-600/30 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                                   >
-                                    <CheckCheck size={12} /> Accept
+                                    {isProcessing ? <Loader2 size={12} className="animate-spin" /> : <CheckCheck size={12} />} Accept
                                   </button>
                                   <button
+                                    disabled={isProcessing}
                                     onClick={async () => {
-                                      const result = await rejectFriendAction(req.id);
-                                      if (result?.success) {
-                                        toast('Friend request rejected', 'success');
-                                      } else {
-                                        toast(result?.error || 'Failed to reject', 'error');
+                                      setProcessingRequestId(req.id);
+                                      try {
+                                        const result = await rejectFriendAction(req.id);
+                                        if (result?.success) {
+                                          toast('Friend request rejected', 'success');
+                                          refetch();
+                                          refreshNotifications();
+                                        } else {
+                                          toast(result?.error || 'Failed to reject', 'error');
+                                        }
+                                      } catch {
+                                        toast('Failed to reject request', 'error');
+                                      } finally {
+                                        setProcessingRequestId(null);
                                       }
                                     }}
-                                    className="flex-1 px-3 py-1.5 rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600/30 transition-colors text-xs font-medium flex items-center justify-center gap-1"
+                                    className="flex-1 px-3 py-1.5 rounded-lg bg-red-600/20 text-red-400 hover:bg-red-600/30 transition-colors text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                                   >
-                                    <UserX size={12} /> Decline
+                                    {isProcessing ? <Loader2 size={12} className="animate-spin" /> : <UserX size={12} />} Decline
                                   </button>
                                 </div>
                               </div>
@@ -243,19 +266,23 @@ export default function ChatDashboard() {
                       </div>
                     )}
 
-                    {/* Regular Notifications */}
-                    {notifications.length === 0 && friendRequests.length === 0 ? (
-                      <div className="p-8 text-center text-white/30 text-xs italic">
-                        No recent notifications
-                      </div>
-                    ) : (
-                      notifications.map(n => (
+                    {/* Regular Notifications — only show unread */}
+                    {(() => {
+                      const unreadNotifs = notifications.filter(n => !n.is_read);
+                      if (unreadNotifs.length === 0 && friendRequests.length === 0) {
+                        return (
+                          <div className="p-8 text-center text-white/30 text-xs italic">
+                            No new notifications
+                          </div>
+                        );
+                      }
+                      return unreadNotifs.map(n => (
                         <div 
                           key={n.id} 
-                          onClick={() => { if (!n.is_read) markAsRead(n.id); setIsNotifOpen(false); }}
-                          className={`p-4 border-b border-white/5 flex gap-3 hover:bg-white/5 transition-colors cursor-pointer relative ${!n.is_read ? 'bg-indigo-500/[0.03]' : ''}`}
+                          onClick={() => { markAsRead(n.id); }}
+                          className="p-4 border-b border-white/5 flex gap-3 hover:bg-white/5 transition-colors cursor-pointer relative bg-indigo-500/[0.03]"
                         >
-                          {!n.is_read && <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-500 rounded-full" />}
+                          <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-500 rounded-full" />
                           <div className={`shrink-0 h-8 w-8 rounded-lg flex items-center justify-center ${
                             n.type === 'dm' ? 'bg-purple-500/10 text-purple-400' :
                             n.type === 'mention' ? 'bg-indigo-500/10 text-indigo-400' :
@@ -270,12 +297,12 @@ export default function ChatDashboard() {
                              <Bell size={14} />}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className={`text-xs ${!n.is_read ? 'text-white font-medium' : 'text-white/60'}`}>{n.content}</p>
+                            <p className="text-xs text-white font-medium">{n.content}</p>
                             <span className="text-[10px] text-white/30">{new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                           </div>
                         </div>
-                      ))
-                    )}
+                      ));
+                    })()}
                   </div>
                 </div>
               )}

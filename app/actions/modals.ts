@@ -196,22 +196,37 @@ export async function addFriendAction(prevState: any, formData: FormData) {
     if (existingFriend) return { error: "You are already friends with this user." };
 
     // Check if friend request already exists
-    const { data: existingRequest } = await supabase
+    const { data: existingRequests, error: fetchErr } = await supabase
       .from("friend_requests")
-      .select("id")
-      .or(`and(sender_id.eq.${me.id},receiver_id.eq.${friend.id}),and(sender_id.eq.${friend.id},receiver_id.eq.${me.id})`)
-      .eq("status", "pending")
-      .single();
-    if (existingRequest) return { error: "A friend request already exists between you two." };
+      .select("id, status")
+      .or(`and(sender_id.eq.${me.id},receiver_id.eq.${friend.id}),and(sender_id.eq.${friend.id},receiver_id.eq.${me.id})`);
+    
+    if (fetchErr) return { error: "Fetch error: " + JSON.stringify(fetchErr) };
+
+    if (existingRequests && existingRequests.length > 0) {
+      const pendingRequest = existingRequests.find(r => r.status === 'pending');
+      if (pendingRequest) {
+        return { error: "A friend request is already pending between you two. Please wait for it to be accepted." };
+      }
+      
+      // Clean up old accepted/rejected requests so a fresh one can be created
+      const idsToDelete = existingRequests.map(r => r.id);
+      const { error: delErr } = await supabase
+        .from("friend_requests")
+        .delete()
+        .in("id", idsToDelete);
+        
+      if (delErr) console.error("Failed to cleanup old requests:", delErr);
+    }
 
     // Create pending request
-    const { error: requestError } = await supabase
+    const { error: requestError, data: insertData } = await supabase
       .from("friend_requests")
-      .insert({ sender_id: me.id, receiver_id: friend.id, status: 'pending' });
+      .insert({ sender_id: me.id, receiver_id: friend.id, status: 'pending' })
+      .select("id");
 
     if (requestError) {
-      if (requestError.code === '23505') return { error: "A pending friend request already exists between you two." };
-      return { error: "Failed to send friend request." };
+      return { error: `Insert failed: ${JSON.stringify(requestError)}` };
     }
 
     // Create notification for the receiver
@@ -242,31 +257,59 @@ export async function acceptFriendAction(requestId: string) {
     const supabase = await createClerkServerClient();
     
     // Get the request
-    const { data: request } = await supabase
+    const { data: request, error: fetchErr } = await supabase
       .from("friend_requests")
       .select("*")
       .eq("id", requestId)
       .eq("status", "pending")
       .single();
     
+    if (fetchErr) return { error: "Failed to fetch request: " + fetchErr.message };
     if (!request) return { error: "Friend request not found or already processed." };
 
     // Get current user id
-    const { data: me } = await supabase.from("users").select("id").eq("clerk_id", userId).single();
-    if (me?.id !== request.receiver_id) return { error: "You can only accept requests sent to you." };
+    const { data: me, error: meErr } = await supabase.from("users").select("id").eq("clerk_id", userId).single();
+    if (meErr) return { error: "Failed to fetch your profile: " + meErr.message };
+    if (!me || me.id !== request.receiver_id) return { error: "You can only accept requests sent to you." };
 
-    // Update request
-    await supabase.from("friend_requests").update({ status: 'accepted', updated_at: new Date().toISOString() }).eq("id", requestId);
+    // Update request status
+    const { error: updateErr } = await supabase
+      .from("friend_requests")
+      .update({ status: 'accepted' })
+      .eq("id", requestId);
+    if (updateErr) return { error: "Failed to update request status: " + updateErr.message };
 
     // Create friendship
     const user_id_1 = request.sender_id < request.receiver_id ? request.sender_id : request.receiver_id;
     const user_id_2 = request.sender_id < request.receiver_id ? request.receiver_id : request.sender_id;
 
-    await supabase.from("friends").insert({ user_id_1, user_id_2 });
+    const { error: friendErr } = await supabase
+      .from("friends")
+      .insert({ user_id_1, user_id_2 });
+    if (friendErr) {
+      // If code is 23505, they are already friends, so we can consider it success
+      if (friendErr.code !== '23505') return { error: "Failed to create friendship: " + friendErr.message };
+    }
+
+    // Clean up friend request notification for the receiver
+    await supabase.from("notifications")
+      .delete()
+      .eq("user_id", me.id)
+      .eq("type", "system")
+      .ilike("content", "%friend request%");
+
+    // ADD A NOTIFICATION TO THE SENDER THAT IT WAS ACCEPTED
+    await supabase.from("notifications").insert({
+      user_id: request.sender_id,
+      type: 'system',
+      content: "Your friend request was accepted!",
+      link: '/friends',
+      is_read: false
+    });
 
     return { success: true, message: "Friend request accepted!" };
   } catch (err: any) {
-    return { error: "Failed to accept friend request." };
+    return { error: "Application error: " + err.message };
   }
 }
 
@@ -276,18 +319,105 @@ export async function rejectFriendAction(requestId: string) {
     if (!userId) return { error: "Unauthorized" };
 
     const supabase = await createClerkServerClient();
-    const { data: me } = await supabase.from("users").select("id").eq("clerk_id", userId).single();
+    const { data: me, error: meErr } = await supabase.from("users").select("id").eq("clerk_id", userId).single();
+    if (meErr) return { error: "Failed to fetch your profile." };
     if (!me) return { error: "User not found" };
     
+    // update status
+    const { error: updateErr } = await supabase
+      .from("friend_requests")
+      .update({ status: 'rejected' })
+      .eq("id", requestId);
+    if (updateErr) return { error: "Failed to declare request rejected: " + updateErr.message };
+
+    // delete notification
+    const { error: delErr } = await supabase.from("notifications")
+      .delete()
+      .eq("user_id", me.id)
+      .eq("type", "system")
+      .ilike("content", "%friend request%");
+    if (delErr) return { error: "Failed to remove notification: " + delErr.message };
+
+    return { success: true, message: "Friend request declined" };
+  } catch (err: any) {
+    return { error: "Application error: " + err.message };
+  }
+}
+
+export async function unfriendAction(friendUserId: string) {
+  try {
+    const { userId } = await auth();
+    if (!userId) return { error: "Unauthorized" };
+
+    const supabase = await createClerkServerClient();
+    const { data: me } = await supabase.from("users").select("id, display_name, username").eq("clerk_id", userId).single();
+    if (!me) return { error: "User not found" };
+
+    // Get friend's info for notification
+    const { data: friendUser } = await supabase.from("users").select("id, display_name, username").eq("id", friendUserId).single();
+
+    // Delete friendship row (order-agnostic)
+    const { error } = await supabase
+      .from("friends")
+      .delete()
+      .or(`and(user_id_1.eq.${me.id},user_id_2.eq.${friendUserId}),and(user_id_1.eq.${friendUserId},user_id_2.eq.${me.id})`);
+
+    if (error) return { error: "Failed to remove friend: " + error.message };
+
+    // Also clean up any old friend_requests between these users
     await supabase
       .from("friend_requests")
-      .update({ status: 'rejected', updated_at: new Date().toISOString() })
-      .eq("id", requestId)
-      .eq("receiver_id", me.id);
+      .delete()
+      .or(`and(sender_id.eq.${me.id},receiver_id.eq.${friendUserId}),and(sender_id.eq.${friendUserId},receiver_id.eq.${me.id})`);
 
-    return { success: true, message: "Friend request rejected." };
+    // Notify both users about the unfriend
+    const myName = me.display_name || me.username || 'A user';
+    const friendName = friendUser?.display_name || friendUser?.username || 'A user';
+
+    await supabase.from("notifications").insert([
+      {
+        user_id: friendUserId,
+        type: 'system',
+        content: `${myName} has removed you as a friend.`,
+        link: null,
+        is_read: false
+      },
+      {
+        user_id: me.id,
+        type: 'system',
+        content: `You removed ${friendName} from your friends.`,
+        link: null,
+        is_read: false
+      }
+    ]);
+
+    return { success: true, message: "Friend removed successfully." };
   } catch (err: any) {
-    return { error: "Failed to reject friend request." };
+    return { error: err.message || "An unexpected error occurred." };
+  }
+}
+
+export async function leaveRoomAction(roomId: string) {
+  try {
+    const { userId } = await auth();
+    if (!userId) return { error: "Unauthorized" };
+
+    const supabase = await createClerkServerClient();
+    const { data: me } = await supabase.from("users").select("id").eq("clerk_id", userId).single();
+    if (!me) return { error: "User not found" };
+
+    // Remove user from room_members
+    const { error } = await supabase
+      .from("room_members")
+      .delete()
+      .eq("room_id", roomId)
+      .eq("user_id", me.id);
+
+    if (error) return { error: "Failed to leave room: " + error.message };
+
+    return { success: true, message: "Left room successfully." };
+  } catch (err: any) {
+    return { error: err.message || "An unexpected error occurred." };
   }
 }
 
@@ -435,3 +565,4 @@ export async function sendRoomInvitationAction(roomId: string, userIds: string[]
     return { error: err.message || "An unexpected error occurred." };
   }
 }
+

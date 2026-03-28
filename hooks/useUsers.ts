@@ -34,6 +34,7 @@ export function useUsers() {
   const [friends, setFriends] = useState<User[]>([]);
   const [friendRequests, setFriendRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshCounter, setRefreshCounter] = useState(0);
 
   const updatePreferences = async (newPrefs: Partial<UserPreferences>) => {
     if (!currentUser) return;
@@ -49,6 +50,11 @@ export function useUsers() {
     if (error) {
       console.error('Error updating preferences:', error);
     }
+  };
+
+  // Manual refetch trigger — call this after accept/decline actions
+  const refetch = () => {
+    setRefreshCounter(c => c + 1);
   };
 
   useEffect(() => {
@@ -94,19 +100,18 @@ export function useUsers() {
             if (reqsData) setFriendRequests(reqsData);
           }
           
-          if (typedUsers && friendsData) {
-            const friendSet = new Set<string>();
+          // Fix: Only include friendships that involve the current user
+          if (typedUsers && friendsData && current) {
+            const myFriendIds = new Set<string>();
             friendsData.forEach((f: any) => {
-              friendSet.add(f.user_id_1);
-              friendSet.add(f.user_id_2);
+              if (f.user_id_1 === current.id) {
+                myFriendIds.add(f.user_id_2);
+              } else if (f.user_id_2 === current.id) {
+                myFriendIds.add(f.user_id_1);
+              }
             });
-            const currentUserDbId = current?.id;
-            
-            if (currentUserDbId) {
-              friendSet.delete(currentUserDbId);
-              const myFriends = typedUsers.filter(u => friendSet.has(u.id));
-              setFriends(myFriends);
-            }
+            const myFriends = typedUsers.filter(u => myFriendIds.has(u.id));
+            setFriends(myFriends);
           }
         }
       } catch (err) {
@@ -118,13 +123,20 @@ export function useUsers() {
 
     fetchData();
 
-    // Set up Realtime for friend_requests to update UI instantly
-    const channel = supabase.channel('friend-requests-changes')
+    // Set up Realtime for friend_requests AND friends tables to update UI instantly
+    const channel = supabase.channel('friend-sync-changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'friend_requests' },
-        (payload) => {
-          fetchData(); // Refetch to keep it simple and accurate
+        () => {
+          fetchData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'friends' },
+        () => {
+          fetchData();
         }
       )
       .subscribe();
@@ -133,7 +145,7 @@ export function useUsers() {
       isMounted = false;
       supabase.removeChannel(channel);
     };
-  }, [userId, supabase]);
+  }, [userId, supabase, refreshCounter]);
 
-  return { allUsers, currentUser, friends, friendRequests, isLoading, updatePreferences };
+  return { allUsers, currentUser, friends, friendRequests, isLoading, updatePreferences, refetch };
 }

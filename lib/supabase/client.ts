@@ -21,13 +21,15 @@ export function getSupabaseClient(): SupabaseClient {
           const headers = new Headers(options?.headers);
           if (_getToken) {
             const token = await _getToken();
-            if (token) {
-              headers.set('Authorization', `Bearer ${token}`);
-            }
+            if (token) headers.set('Authorization', `Bearer ${token}`);
           }
-          return fetch(url, { ...options, headers });
+          return fetch(url, { ...options, headers, cache: 'no-store' });
         },
       },
+      // THIS CAUSES WEBSOCKET/REALTIME CLIENT TO INJECT JWT
+      accessToken: async () => {
+        return _getToken ? await _getToken() : null;
+      }
     }
   );
 

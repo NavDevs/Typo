@@ -112,11 +112,14 @@ export function useNotifications(userId: string | null) {
           filter: `user_id=eq.${userId}`
         },
         (payload) => {
+          // Identify which notification was deleted
           const deletedId = payload.old?.id;
           if (deletedId) {
             setNotifications(prev => prev.filter(n => n.id !== deletedId));
-            // Recalculate unread count
-            setUnreadCount(prev => Math.max(0, prev - 1));
+            
+            // Re-fetch count or adjust based on old value if possible, 
+            // but the safest approach is to just re-fetch fully to stay perfectly in sync
+            fetchNotifications();
           }
         }
       )
